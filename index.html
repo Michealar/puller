@@ -32,3 +32,113 @@ a.card.seen .t{color:var(--mu)}
 #st{text-align:center;color:var(--mu);font-size:13px;padding:8px}
 </style></head><body>
 <header>
+<div class="row"><h1>Sec<span>Feed</span></h1><button id="cf" title="Relay settings">⚙</button><button id="rf">↻</button></div>
+<div class="cats" id="cats"></div>
+<input id="q" type="search" placeholder="Search headlines…">
+<div class="chips" id="chips"></div>
+</header>
+<main><div id="st">Loading…</div><div id="list"></div></main>
+<script>
+const FEEDS=[
+{c:"Security",n:"SANS ISC",u:["https://isc.sans.edu/rssfeed.xml","https://isc.sans.edu/rssfeed_full.xml"]},
+{c:"Security",n:"Huntress",u:["https://www.huntress.com/blog/rss.xml"]},
+{c:"Security",n:"Group-IB",u:["https://www.group-ib.com/blog/rss.xml","https://www.group-ib.com/blog/feed/"]},
+{c:"Security",n:"Microsoft Security",u:["https://www.microsoft.com/en-us/security/blog/feed/","https://www.microsoft.com/en-us/security/blog/feed"]},
+{c:"Security",n:"SecurityWeek",u:["https://feeds.feedburner.com/securityweek","https://www.securityweek.com/feed/"]},
+{c:"Security",n:"The Hacker News",u:["https://feeds.feedburner.com/TheHackersNews","https://thehackernews.com/feeds/posts/default"]},
+{c:"Security",n:"Daniel Miessler",u:["https://danielmiessler.com/feed.rss"]},
+{c:"Security",n:"Graham Cluley",u:["https://grahamcluley.com/feed/"]},
+{c:"Security",n:"Schneier",u:["https://www.schneier.com/feed/atom/","https://feeds.feedburner.com/schneier/fulltext","https://www.schneier.com/blog/atom.xml","https://www.schneier.com/feed/"]},
+{c:"Security",n:"Krebs",u:["https://krebsonsecurity.com/feed/"]},
+{c:"Health",n:"Harvard Health",u:["https://www.health.harvard.edu/blog/feed","https://www.health.harvard.edu/rss"]},
+{c:"Health",n:"Mayo Clinic",u:["https://newsnetwork.mayoclinic.org/feed/"]},
+{c:"Health",n:"NIH News in Health",u:["https://newsinhealth.nih.gov/rss"]},
+{c:"Health",n:"ScienceDaily Health",u:["https://www.sciencedaily.com/rss/health_medicine.xml"]},
+{c:"Health",n:"Stronger By Science",u:["https://www.strongerbyscience.com/feed/"]},
+{c:"Health",n:"Precision Nutrition",u:["https://www.precisionnutrition.com/feed"]},
+{c:"Health",n:"Examine",u:["https://examine.com/feed/"]},
+{c:"Health",n:"Peter Attia",u:["https://peterattia.com/feed/"]}];
+const PROXIES=[
+u=>"https://api.allorigins.win/raw?url="+encodeURIComponent(u),
+u=>"https://api.allorigins.win/get?url="+encodeURIComponent(u),
+u=>"https://corsproxy.org/?"+encodeURIComponent(u),
+u=>"https://corsproxy.io/?url="+encodeURIComponent(u),
+u=>"https://api.codetabs.com/v1/proxy?quest="+encodeURIComponent(u),
+u=>"https://thingproxy.freeboard.io/fetch/"+u];
+const $=s=>document.querySelector(s);
+const ls=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
+let items=ls("items",[]),cat="All",src="All",seen=new Set(ls("seen",[]));
+const strip=h=>(new DOMParser().parseFromString(h||"","text/html").body.textContent||"").trim().slice(0,300);
+const txt=(e,s)=>{const n=e.querySelector(s);return n?n.textContent:""};
+const safe=u=>/^https?:\/\//i.test(u)?u:"";
+function parse(xml,name){
+ const doc=new DOMParser().parseFromString(xml,"text/xml");
+ if(doc.querySelector("parsererror"))return[];
+ return[...doc.querySelectorAll("item,entry")].slice(0,25).map(e=>{
+  const l=e.querySelector("link");
+  const link=safe(l?(l.getAttribute("href")||l.textContent).trim():"");
+  const date=new Date(txt(e,"pubDate")||txt(e,"published")||txt(e,"updated")||txt(e,"date")).getTime()||0;
+  return{src:name,title:strip(txt(e,"title")),link,date,desc:strip(txt(e,"description")||txt(e,"summary")||txt(e,"content"))};
+ }).filter(i=>i.link&&i.title);
+}
+async function get(url){
+ const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),9000);
+ try{const r=await fetch(url,{signal:ctl.signal});if(!r.ok)return"";let t=await r.text();
+  if(url.includes("allorigins.win/get")){try{t=JSON.parse(t).contents||""}catch(e){t=""}}return t}catch(e){return""}finally{clearTimeout(t)}
+}
+const RELAY=()=>(localStorage.getItem("relay")||"").trim().replace(/\/+$/,"");
+async function load(f){
+ const r=RELAY();
+ for(const u of f.u){
+  if(r){const o=parse(await get(r+"/?url="+encodeURIComponent(u)),f.n);if(o.length)return o}
+  for(const p of PROXIES){
+   const o=parse(await get(p(u)),f.n);if(o.length)return o;
+  }
+  try{const j=JSON.parse(await get("https://api.rss2json.com/v1/api.json?rss_url="+encodeURIComponent(u)));
+   const o=(j.items||[]).map(i=>({src:f.n,title:strip(i.title),link:safe(i.link),date:new Date((i.pubDate||"").replace(" ","T")+"Z").getTime()||0,desc:strip(i.description)})).filter(i=>i.link);
+   if(o.length)return o}catch(e){}
+ }
+ return[];
+}
+async function pool(list,fn,n){
+ const out=new Array(list.length);let i=0;
+ await Promise.all(Array.from({length:n},async()=>{while(i<list.length){const k=i++;out[k]=await fn(list[k]).catch(()=>[])}}));
+ return out;
+}
+async function refresh(){
+ $("#st").textContent="Fetching "+FEEDS.length+" sources…";$("#rf").disabled=true;
+ const res=await pool(FEEDS,load,RELAY()?6:3);
+ const fresh=res.flat();
+ const failed=FEEDS.filter((f,i)=>!res[i].length).map(f=>f.n);
+ const ok=new Set(fresh.map(i=>i.src));
+ items=[...fresh,...items.filter(i=>!ok.has(i.src))].sort((a,b)=>b.date-a.date);
+ try{localStorage.setItem("items",JSON.stringify(items.slice(0,500)))}catch(e){}
+ $("#st").textContent=failed.length?"Couldn't load: "+failed.join(", ")+" (tap ↻ to retry)"+(RELAY()?"":" — tip: tap ⚙ to add your relay for reliable loading"):"Updated "+new Date().toLocaleTimeString();
+ $("#rf").disabled=false;render();
+}
+function btn(label,cls,fn){const b=document.createElement("button");b.textContent=label;b.className=cls;b.onclick=fn;return b}
+function render(){
+ const q=$("#q").value.toLowerCase();
+ const cats=$("#cats");cats.replaceChildren(...["All","Security","Health"].map(c=>btn(c,c==cat?"on":"",()=>{cat=c;src="All";render()})));
+ const names=FEEDS.filter(f=>cat=="All"||f.c==cat).map(f=>f.n);
+ $("#chips").replaceChildren(...["All",...names].map(n=>btn(n,"chip "+(n==src?"on":""),()=>{src=n;render()})));
+ const vis=items.filter(i=>names.includes(i.src)&&(src=="All"||i.src==src)&&(!q||(i.title+i.desc).toLowerCase().includes(q)));
+ $("#list").replaceChildren(...vis.map(i=>{
+  const a=document.createElement("a");a.className="card"+(seen.has(i.link)?" seen":"");a.href=i.link;a.target="_blank";a.rel="noopener";
+  const m=document.createElement("div");m.className="m";
+  const b=document.createElement("b");b.textContent=i.src;
+  const d=document.createElement("span");d.textContent=i.date?new Date(i.date).toLocaleDateString(undefined,{month:"short",day:"numeric"}):"";
+  m.append(b,d);
+  const t=document.createElement("div");t.className="t";t.textContent=i.title;
+  const s=document.createElement("div");s.className="d";s.textContent=i.desc;
+  a.append(m,t,s);
+  a.onclick=()=>{seen.add(i.link);try{localStorage.setItem("seen",JSON.stringify([...seen]))}catch(e){}a.classList.add("seen")};
+  return a}));
+}
+$("#q").oninput=render;$("#rf").onclick=refresh;
+$("#cf").onclick=()=>{const v=prompt("Paste your Cloudflare Worker URL (leave empty to remove):",RELAY());if(v===null)return;
+ if(v.trim()&&!/^https:\/\//i.test(v.trim())){alert("URL must start with https://");return}
+ localStorage.setItem("relay",v.trim());refresh()};
+render();refresh();
+if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js");
+</script></body></html>
