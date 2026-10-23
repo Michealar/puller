@@ -1,4 +1,4 @@
-const C="secfeed-v3",A=["./","./index.html","./manifest.json","./icon-192.png"];
+const C="secfeed-v4",A=["./","./index.html","./manifest.json","./icon-192.png"];
 self.addEventListener("install",e=>e.waitUntil(caches.open(C).then(c=>c.addAll(A))));
 self.addEventListener("fetch",e=>{
  if(new URL(e.request.url).origin!==location.origin)return;
